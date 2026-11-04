@@ -1,0 +1,8 @@
+trident @ git+https://github.com/mahmoodlab/TRIDENT.git@e4c98b2280d5b905fe83b00f01afac0f76755880
+torch>=2.2,<3
+torchvision>=0.17,<1
+numpy>=1.26,<3
+pandas>=2.0,<3
+h5py>=3.9,<4
+scikit-learn>=1.3,<2
+

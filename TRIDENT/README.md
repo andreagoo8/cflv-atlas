@@ -1,0 +1,276 @@
+# 🔱   Trident
+
+ [arXiv](https://arxiv.org/pdf/2502.06750) | [Blog](https://www.linkedin.com/pulse/announcing-new-open-source-tools-accelerate-ai-pathology-andrew-zhang-loape/?trackingId=pDkifo54SRuJ2QeGiGcXpQ%3D%3D) | [Cite](https://github.com/mahmoodlab/trident?tab=readme-ov-file#reference)
+| [Documentation](https://trident-docs.readthedocs.io/en/latest/) | [License](https://github.com/mahmoodlab/trident?tab=License-1-ov-file)
+ 
+Trident is a toolkit for large-scale whole-slide image processing.
+This project was developed by the [Mahmood Lab](https://faisal.ai/) at Harvard Medical School and Brigham and Women's Hospital. This work was funded by NIH NIGMS R35GM138216.
+
+> [!NOTE]
+> Contributions are welcome! Please report any issues. You may also contribute by opening a pull request.
+
+### Key Features:
+
+<img align="right" src="_readme/trident_crop.jpg" width="250px" />
+
+- **End-to-end pipeline**: tissue segmentation → patch coordinates → patch / slide embeddings, in one command (`--task all`) or stage-by-stage.
+- **33 patch encoders**: [UNI](https://www.nature.com/articles/s41591-024-02857-3), [CONCHv1.5](https://huggingface.co/MahmoodLab/conchv1_5), [Virchow](https://www.nature.com/articles/s41591-024-03141-0), [Prov-GigaPath](https://huggingface.co/prov-gigapath/prov-gigapath), [H-Optimus-0](https://github.com/bioptimus/releases/tree/main/models/h-optimus/v0), etc.
+- **Slide encoders**: [Titan](https://arxiv.org/abs/2411.19666), [GigaPath](https://www.nature.com/articles/s41586-024-07441-w), [PRISM](https://huggingface.co/paige-ai/Prism), [CHIEF](https://github.com/hms-dbmi/CHIEF), [Madeleine](https://huggingface.co/MahmoodLab/madeleine), [Feather](https://huggingface.co/MahmoodLab/abmil.base.conch_v15.pc108-24k).
+- **Tissue segmentation**: [HEST](https://huggingface.co/MahmoodLab/hest-tissue-seg), [GrandQC](https://github.com/cpath-ukk/grandqc), or **Otsu** for CPU-only runs. Optional `--remove_artifacts` / `--remove_penmarks` clean-up pass.
+- **Multiple WSI readers**: OpenSlide, CuCIM, plain images (`.png`, `.jpeg`), SDPC, OME-Zarr (`.zarr`), Zeiss CZI (`.czi`). Or convert to pyramidal TIFF with `trident convert`.
+- **Multi-GPU**: `--gpus 0 1 2 3` distributes pending slides across GPUs.
+- **Smart resume**: outputs are tracked per-slide; re-running on the same `--job_dir` skips already-completed work. `.lock` files protect in-flight tasks; stale ones are cleaned safely with `--clear_dead_locks`.
+- **WSI cache pipeline** for slow / network storage: `--wsi_cache /local/ssd --cache_batch_size 32` stages slides locally via a producer/consumer pipeline.
+- **Run reports**: every run writes `summary.md` (human-readable), `runs/<id>.json` (manifest), and `wsi_states/<slide>.json` (per-slide tasks, attempts, errors, resume info).
+
+
+### 🔨 1. **Installation**:
+- Create an environment (Python 3.10 or 3.11): `conda create -n "trident" python=3.10`, and activate it `conda activate trident`.
+- Cloning: `git clone https://github.com/mahmoodlab/trident.git && cd trident`.
+- Local installation: `pip install -e .`.
+  - This installs the shared model stack (`timm>=0.9.16,<2`, `transformers>=4.51,<5`, `safetensors`, etc.).
+
+Optional install profiles:
+- `pip install -e ".[patch-encoders]"` for patch embedding-related extras (e.g. [CONCH](https://huggingface.co/MahmoodLab/CONCH), [MUSK](https://huggingface.co/xiangjx/musk), [CTransPath / CHIEF](https://github.com/hms-dbmi/CHIEF)).
+- `pip install -e ".[slide-encoders]"` for slide embedding-related extras (e.g. [PRISM](https://huggingface.co/paige-ai/Prism), [GigaPath](https://huggingface.co/prov-gigapath/prov-gigapath), [Madeleine](https://huggingface.co/MahmoodLab/madeleine)).
+- `pip install -e ".[omezarr]"` for OME Zarr WSI reader support ([OME-NGFF / OME-Zarr](https://ngff.openmicroscopy.org/latest/)).
+- `pip install -e ".[czi]"` for Zeiss CZI WSI reader support ([pylibCZIrw](https://pypi.org/project/pylibCZIrw/)).
+- `pip install -e ".[convert]"` for slide conversion to tiff.
+- `pip install -e ".[full]"` to install all pip-installable optional dependencies.
+
+Run checks before launching jobs:
+- `trident-doctor --profile base`
+- `trident-doctor --profile patch-encoders --check-gated`
+- `trident-doctor --profile slide-encoders`
+- `trident-doctor --profile convert`
+- `trident-doctor --profile full --check-gated`
+
+> [!NOTE]
+> Some models still require manual setup (e.g., local CHIEF repository path in `trident/slide_encoder_models/local_ckpts.json`) or HuggingFace gated access approvals.
+
+### 🔨 2. **Running Trident**:
+
+> [!TIP]
+> **Using an AI coding agent (e.g. [Claude Code](https://claude.com/claude-code))?** Trident ships an Agent Skill at [`.claude/skills/trident/`](.claude/skills/trident/SKILL.md). Open this repo in Claude Code and your agent can drive Trident end-to-end — segmentation, patching, and patch/slide feature extraction — with the correct encoder↔resolution pairings, output layout, and common-pitfall handling baked in. Copy the folder to `~/.claude/skills/` to use it from any project.
+
+**Already familiar with WSI processing?** Perform segmentation, patching, and UNI feature extraction from a directory of WSIs with:
+
+```
+python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./trident_processed --patch_encoder uni_v1 --mag 20 --patch_size 256
+```
+
+**Feeling cautious?**
+
+Run this command to perform all processing steps for a **single** slide:
+```
+python run_single_slide.py --slide_path ./wsis/xxxx.svs --job_dir ./trident_processed --patch_encoder uni_v1 --mag 20 --patch_size 256
+```
+
+Convert images/WSIs to pyramidal TIFF:
+```
+trident convert --input_dir ./wsis --mpp_csv ./wsis/to_process.csv --job_dir ./pyramidal_tiff --downscale_by 1 --num_workers 1
+```
+`--mpp_csv` is required and must contain `wsi,mpp` columns. Only files listed in the CSV are converted.
+If embedded MPP metadata is detected in a slide, Trident compares it to the CSV value and logs mismatches.
+
+**Or follow step-by-step instructions:**
+
+**Step 1: Tissue Segmentation:** Segments tissue vs. background from a dir of WSIs
+ - **Command**:
+   ```bash
+   python run_batch_of_slides.py --task seg --wsi_dir ./wsis --job_dir ./trident_processed --gpus 0 --segmenter hest
+   ```
+   - `--task seg`: Specifies that you want to do tissue segmentation.
+   - `--wsi_dir ./wsis`: Path to dir with your WSIs.
+   - `--job_dir ./trident_processed`: Output dir for processed results.
+   - `--gpus 0`: Use GPU index 0. Pass multiple IDs (e.g. `--gpus 0 1`) to shard across GPUs, or `-1` to force CPU.
+  - `--segmenter`: Segmentation model. Defaults to `hest`. Use `grandqc` ([Citation necessary](https://www.nature.com/articles/s41467-024-54769-y), [Non-commercial use](https://creativecommons.org/licenses/by-nc-sa/4.0/), [Original repository](https://github.com/cpath-ukk/grandqc)) for fast H&E segmentation or `otsu` for a classical image-processing-only fallback. Add the option `--remove_artifacts` for additional artifact clean up.
+ - **Outputs**:
+   - WSI thumbnails in `./trident_processed/thumbnails`.
+   - WSI thumbnails with tissue contours in `./trident_processed/contours`.
+   - GeoJSON files containing tissue contours in `./trident_processed/contours_geojson`. These can be opened in [QuPath](https://qupath.github.io/) for editing/quality control, if necessary.
+
+| Segmenter | Args | Link | License |
+|-----------|------|------|---------|
+| **HEST** (default) | `--segmenter hest` | [MahmoodLab/hest-tissue-seg](https://huggingface.co/MahmoodLab/hest-tissue-seg) | 🌐 [CC-BY-NC-SA-4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) |
+| **GrandQC** | `--segmenter grandqc` | [cpath-ukk/grandqc](https://github.com/cpath-ukk/grandqc) | 🌐 [CC-BY-NC-SA-4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) |
+| **Otsu** | `--segmenter otsu` | — | — (classical, no model) |
+
+ **Step 2: Tissue Patching:** Extracts patches from segmented tissue regions at a specific magnification.
+ - **Command**:
+   ```bash
+   python run_batch_of_slides.py --task coords --wsi_dir ./wsis --job_dir ./trident_processed --mag 20 --patch_size 256 --overlap 0
+   ```
+   - `--task coords`: Specifies that you want to do patching.
+   - `--wsi_dir wsis`: Path to the dir with your WSIs.
+   - `--job_dir ./trident_processed`: Output dir for processed results.
+   - `--mag 20`: Extracts patches at 20x magnification.
+   - `--patch_size 256`: Each patch is 256x256 pixels.
+   - `--overlap 0`: Patches overlap by 0 pixels, **always** an absolute number in pixels, e.g., `--overlap 128` for 50% overlap for 256x256 patches.
+ - **Outputs**:
+   - Patch coordinates as h5 files in `./trident_processed/20x_256px_0px_overlap/patches`.
+   - WSI thumbnails annotated with patch borders in `./trident_processed/20x_256px_0px_overlap/visualization`.
+
+ **Step 3a: Patch Feature Extraction:** Extracts features from tissue patches using a specified encoder
+ - **Command**:
+   ```bash
+   python run_batch_of_slides.py --task feat --wsi_dir ./wsis --job_dir ./trident_processed --patch_encoder uni_v1 --mag 20 --patch_size 256 
+   ```
+   - `--task feat`: Specifies that you want to do feature extraction.
+   - `--wsi_dir wsis`: Path to the dir with your WSIs.
+   - `--job_dir ./trident_processed`: Output dir for processed results.
+   - `--patch_encoder uni_v1`: Uses the `UNI` patch encoder. See below for list of supported models. 
+   - `--mag 20`: Features are extracted from patches at 20x magnification.
+   - `--patch_size 256`: Patches are 256x256 pixels in size.
+ - **Outputs**: 
+   - Features are saved as h5 files in `./trident_processed/20x_256px_0px_overlap/features_uni_v1`. (Shape: `(n_patches, feature_dim)`)
+
+Trident supports 33 patch encoders, loaded via a patch [`encoder_factory`](https://github.com/mahmoodlab/trident/blob/main/trident/patch_encoder_models/load.py#L14). Models requiring specific installations will return error messages with additional instructions. Gated models on HuggingFace require access requests.
+
+| Patch Encoder         | Embedding Dim | Args                                                             | Link | License |
+|-----------------------|---------------:|------------------------------------------------------------------|------|---------|
+| **UNI**               | 1024           | `--patch_encoder uni_v1 --patch_size 256 --mag 20`               | [MahmoodLab/UNI](https://huggingface.co/MahmoodLab/UNI) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **UNI2-h**             | 1536           | `--patch_encoder uni_v2 --patch_size 256 --mag 20`               | [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **CONCH**             | 512            | `--patch_encoder conch_v1 --patch_size 512 --mag 20`             | [MahmoodLab/CONCH](https://huggingface.co/MahmoodLab/CONCH) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **CONCHv1.5**         | 768            | `--patch_encoder conch_v15 --patch_size 512 --mag 20`            | [MahmoodLab/conchv1_5](https://huggingface.co/MahmoodLab/conchv1_5) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **Virchow**           | 2560           | `--patch_encoder virchow --patch_size 224 --mag 20`              | [paige-ai/Virchow](https://huggingface.co/paige-ai/Virchow) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **Virchow2**          | 2560           | `--patch_encoder virchow2 --patch_size 224 --mag 20`             | [paige-ai/Virchow2](https://huggingface.co/paige-ai/Virchow2) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **Virchow2 (CLS)**    | 1280           | `--patch_encoder virchow2-cls --patch_size 224 --mag 20`         | [paige-ai/Virchow2](https://huggingface.co/paige-ai/Virchow2) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **Phikon**            | 768            | `--patch_encoder phikon --patch_size 224 --mag 20`               | [owkin/phikon](https://huggingface.co/owkin/phikon) | 🌐 [Owkin non-commercial](https://github.com/owkin/HistoSSLscaling/blob/main/LICENSE.txt) |
+| **Phikon-v2**         | 1024           | `--patch_encoder phikon_v2 --patch_size 224 --mag 20`            | [owkin/phikon-v2](https://huggingface.co/owkin/phikon-v2/) | 🌐 [Owkin non-commercial](https://huggingface.co/owkin/phikon-v2/blob/main/LICENSE.pdf) |
+| **KEEP**              | 768            | `--patch_encoder keep --patch_size 256 --mag 20`                 | [Astaxanthin/KEEP](https://huggingface.co/Astaxanthin/KEEP) | 🌐 [MIT](https://opensource.org/license/mit) |
+| **Prov-Gigapath**     | 1536           | `--patch_encoder gigapath --patch_size 256 --mag 20`             | [prov-gigapath](https://huggingface.co/prov-gigapath/prov-gigapath) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **Prov-Gigapath-Flash** | 384          | `--patch_encoder gigapath-flash --patch_size 256 --mag 20`       | [prov-gigapath-flash](https://huggingface.co/prov-gigapath/prov-gigapath-flash) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **H-Optimus-0**       | 1536           | `--patch_encoder hoptimus0 --patch_size 224 --mag 20`            | [bioptimus/H-optimus-0](https://huggingface.co/bioptimus/H-optimus-0) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **H-Optimus-1**       | 1536           | `--patch_encoder hoptimus1 --patch_size 224 --mag 20`            | [bioptimus/H-optimus-1](https://huggingface.co/bioptimus/H-optimus-1) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **H0-mini**           | 768/1536       | `--patch_encoder h0-mini --patch_size 224 --mag 20`              | [bioptimus/H0-mini](https://huggingface.co/bioptimus/H0-mini) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **MUSK**              | 1024           | `--patch_encoder musk --patch_size 384 --mag 20`                 | [xiangjx/musk](https://huggingface.co/xiangjx/musk) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **Midnight-12k**      | 3072           | `--patch_encoder midnight12k --patch_size 224 --mag 20`          | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | 🌐 [MIT](https://opensource.org/license/mit) |
+| **Phaet**             | 1024           | `--patch_encoder phaet --patch_size 224 --mag 20`                | [wearewaiv/phaet](https://huggingface.co/wearewaiv/phaet) | 🔒 [Waiv non-commercial](https://huggingface.co/wearewaiv/phaet/blob/main/LICENSE.pdf) |
+| **Mascaret**          | 1536/3072      | `--patch_encoder mascaret --patch_size 224 --mag 20`             | [wearewaiv/mascaret](https://huggingface.co/wearewaiv/mascaret) | 🔒 [Waiv non-commercial](https://huggingface.co/wearewaiv/mascaret/blob/main/LICENSE.pdf) |
+| **OpenMidnight**      | 1536           | `--patch_encoder openmidnight --patch_size 224 --mag 20`         | [SophontAI/OpenMidnight](https://huggingface.co/SophontAI/OpenMidnight) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **GPFM**              | 1024           | `--patch_encoder gpfm --patch_size 224 --mag 20`                 | [majiabo/GPFM](https://huggingface.co/majiabo/GPFM) | 🌐 [MIT](https://opensource.org/license/mit) |
+| **GenBio-PathFM**     | 4608           | `--patch_encoder genbio-pathfm --patch_size 224 --mag 20`        | [genbio-ai/genbio-pathfm](https://huggingface.co/genbio-ai/genbio-pathfm) | 🌐 [GenBio AI Community](https://huggingface.co/genbio-ai/genbio-pathfm/blob/main/LICENSE.txt) |
+| **Gemma 4** ¹         | 768/1152       | `--patch_encoder {gemma4-e4b, gemma4-26b} --patch_size 224 --mag 20` | [google/gemma-4-E4B](https://huggingface.co/google/gemma-4-E4B) / [google/gemma-4-26B-A4B](https://huggingface.co/google/gemma-4-26B-A4B) | 🌐 [Gemma Terms](https://ai.google.dev/gemma/docs/gemma_4_license) |
+| **Kaiko**             | 384/768/1024   | `--patch_encoder {kaiko-vits8, kaiko-vits16, kaiko-vitb8, kaiko-vitb16, kaiko-vitl14} --patch_size 256 --mag 20` | [1aurent/kaikoai-models-66636c99d8e1e34bc6dcf795](https://huggingface.co/collections/1aurent/kaikoai-models-66636c99d8e1e34bc6dcf795) | 🌐 [Kaiko non-commercial](https://github.com/kaiko-ai/towards_large_pathology_fms/blob/main/LICENSE) |
+| **Lunit**             | 384            | `--patch_encoder lunit-vits8 --patch_size 224 --mag 20`          | [1aurent/vit_small_patch8_224.lunit_dino](https://huggingface.co/1aurent/vit_small_patch8_224.lunit_dino) | 🌐 [Lunit non-commercial](https://huggingface.co/1aurent/vit_small_patch8_224.lunit_dino) |
+| **Hibou**             | 1024           | `--patch_encoder hibou_l --patch_size 224 --mag 20`              | [histai/hibou-L](https://huggingface.co/histai/hibou-L) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **CTransPath-CHIEF**  | 768            | `--patch_encoder ctranspath --patch_size 256 --mag 10`           | — | 🌐 [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html) |
+| **ResNet50**          | 1024           | `--patch_encoder resnet50 --patch_size 256 --mag 20`             | — | 🌐 [BSD-3-Clause](https://opensource.org/license/bsd-3-clause) |
+
+¹ Gemma 4 requires `transformers>=5`, which is incompatible with `hibou_l`. Use a separate environment.
+
+**Step 3b: Slide Feature Extraction:** Extracts slide embeddings using a slide encoder. Will also automatically extract the right patch embeddings. 
+ - **Command**:
+   ```bash
+   python run_batch_of_slides.py --task feat --wsi_dir ./wsis --job_dir ./trident_processed --slide_encoder titan --mag 20 --patch_size 512 
+   ```
+   - `--task feat`: Specifies that you want to do feature extraction.
+   - `--wsi_dir wsis`: Path to the dir containing WSIs.
+   - `--job_dir ./trident_processed`: Output dir for processed results.
+   - `--slide_encoder titan`: Uses the `Titan` slide encoder. See below for supported models.
+   - `--mag 20`: Features are extracted from patches at 20x magnification.
+   - `--patch_size 512`: Patches are 512x512 pixels in size.
+ - **Outputs**: 
+   - Features are saved as h5 files in `./trident_processed/20x_512px_0px_overlap/slide_features_titan`. (Shape: `(feature_dim)`)
+
+Trident supports 12 slide encoders, loaded via a slide-level [`encoder_factory`](https://github.com/mahmoodlab/trident/blob/main/trident/slide_encoder_models/load.py#L14). Models requiring specific installations will return error messages with additional instructions. Gated models on HuggingFace require access requests.
+
+| Slide Encoder | Patch Encoder | Args | Link | License |
+|---------------|----------------|------|------|---------|
+| **Threads** | conch_v15 | `--slide_encoder threads --patch_size 512 --mag 20` | *(Coming Soon!)* | — |
+| **Titan** | conch_v15 | `--slide_encoder titan --patch_size 512 --mag 20` | [MahmoodLab/TITAN](https://huggingface.co/MahmoodLab/TITAN) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **PRISM** | virchow | `--slide_encoder prism --patch_size 224 --mag 20` | [paige-ai/Prism](https://huggingface.co/paige-ai/Prism) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **PRISM2** | virchow2-cls | `--slide_encoder prism2 --patch_size 224 --mag 20` | [paige-ai/Prism2](https://huggingface.co/paige-ai/Prism2) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **CHIEF** | ctranspath | `--slide_encoder chief --patch_size 256 --mag 10` | [CHIEF](https://github.com/hms-dbmi/CHIEF) | 🌐 [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) |
+| **GigaPath** | gigapath | `--slide_encoder gigapath --patch_size 256 --mag 20` | [prov-gigapath](https://huggingface.co/prov-gigapath/prov-gigapath) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **GigaPath-Flash** | gigapath-flash | `--slide_encoder gigapath-flash --patch_size 256 --mag 20` | [prov-gigapath-flash](https://huggingface.co/prov-gigapath/prov-gigapath-flash) | 🔒 [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) |
+| **Madeleine** | conch_v1 | `--slide_encoder madeleine --patch_size 256 --mag 10` | [MahmoodLab/madeleine](https://huggingface.co/MahmoodLab/madeleine) | 🔒 [MIT](https://opensource.org/license/mit) |
+| **Feather** | conch_v15 | `--slide_encoder feather --patch_size 512 --mag 20` | [MahmoodLab/FEATHER](https://huggingface.co/MahmoodLab/abmil.base.conch_v15.pc108-24k) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **Feather-UNI2** | uni_v2 | `--slide_encoder feather_uni_v2 --patch_size 256 --mag 20` | [MahmoodLab/FEATHER](https://huggingface.co/MahmoodLab/abmil.base.uni_v2.pc108-24k) | 🔒 [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) |
+| **CARE** | conch_v15 | `--slide_encoder care --patch_size 512 --mag 20` | [Zipper-1/CARE](https://huggingface.co/Zipper-1/CARE) | 🔒 [CC-BY-NC-4.0](https://creativecommons.org/licenses/by-nc/4.0/) |
+| **ABMIL** | any | Python API only — untrained aggregator, see note below | — | — |
+
+> [!NOTE]
+> **ABMIL** is an untrained attention-pooling aggregator, not a pretrained encoder. It is only usable from the Python API with explicit hyperparameters (`encoder_factory('abmil', pretrained=False, input_feature_dim=768, n_heads=1, head_dim=64, dropout=0.1, gated=True)`); `--slide_encoder abmil` raises a `TypeError`.
+
+> [!NOTE]
+> If your task includes multiple slides per patient, you can generate patient-level embeddings by: (1) processing each slide independently and taking their average slide embedding (late fusion) or (2) pooling all patches together and processing that as a single "pseudo-slide" (early fusion). For an implementation of both fusion strategies, please check out our sister repository [Patho-Bench](https://github.com/mahmoodlab/Patho-Bench).
+
+Please see our [tutorials](https://github.com/mahmoodlab/trident/tree/main/tutorials) for more support as well as a [detailed readme](https://github.com/mahmoodlab/trident/blob/main/DETAILS.md) for additional features.
+
+### 🙋 FAQ
+- **Q**: How do I extract patch embeddings from legacy patch coordinates extracted with [CLAM](https://github.com/mahmoodlab/CLAM)?
+   - **A**:
+      ```bash
+      python run_batch_of_slides.py --task feat --wsi_dir ..wsis --job_dir legacy_dir --patch_encoder uni_v1 --mag 20 --patch_size 256 --coords_dir extracted_mag20x_patch256_fp/
+      ```
+- **Q**: How do I keep patches corresponding to holes in the tissue?
+   - **A**: In `run_batch_of_slides`, this behavior is default. Set `--remove_holes` to exclude patches on top of holes.
+
+- **Q**: I see weird messages when building models using timm. What is happening?
+   - **A**: Check your version. Trident needs `timm>=0.9.16,<2`.
+
+- **Q**: `gigapath`, `gigapath-flash` or `prism2` fails with a FlashAttention error. What do I do?
+   - **A**: On Blackwell GPUs you need `flash-attn>=2.7.3`. Grab a prebuilt wheel from its
+     [releases](https://github.com/Dao-AILab/flash-attention/releases) — PyPI ships only an sdist.
+
+- **Q**: What’s the recommended way to run Trident from another project?
+  - **A**: Use the **CLI** (recommended for reproducibility). Install Trident, then call:
+
+```bash
+trident single -- --slide_path ./wsis/example.svs --job_dir ./job --patch_encoder uni_v1 --mag 20 --patch_size 256
+trident batch  -- --task all --wsi_dir ./wsis --job_dir ./job --patch_encoder uni_v1 --mag 20 --patch_size 256
+```
+
+  - If you need to call Trident from Python, just use the public API (`Processor`, `load_wsi`).
+
+- **Q**: I am not satisfied with the tissue vs background segmentation. What can I do?
+   - **A**: Trident uses GeoJSON to store and load segmentations. This format is natively supported by [QuPath](https://qupath.github.io/). You can load the Trident segmentation into QuPath, modify it using QuPath's annotation tools, and save the updated segmentation back to GeoJSON.
+   - **A**: You can try another segmentation model by specifying `--segmenter grandqc` ([Citation necessary](https://www.nature.com/articles/s41467-024-54769-y), [Non-commercial use](https://creativecommons.org/licenses/by-nc-sa/4.0/), [Original repository](https://github.com/cpath-ukk/grandqc)) or `--segmenter otsu`.
+
+- **Q**: I want to process a custom list of WSIs. Can I do it? Also, most of my WSIs don't have the micron per pixel (mpp) stored. Can I pass it?
+   - **A**: Yes using the `--custom_list_of_wsis` argument. Provide a list of WSI names in a CSV (with slide extension, `wsi`). Optionally, provide the mpp (field `mpp`)
+ 
+ - **Q**: Do I need to install any additional packages to use Trident?
+   - **A**: `pip install -e .` installs core dependencies. Some optional components still require extra installs. Use profiles (`.[patch-encoders]`, `.[slide-encoders]`, `.[convert]`, `.[omezarr]` or `.[full]`) and run `trident-doctor` for preflight checks.
+
+## License and Terms of Use
+
+ⓒ Mahmood Lab. This repository is released under the [CC-BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/deed.en) license and may only be used for non-commercial, academic research purposes with proper attribution. Any commercial use, sale, or other monetization of this repository is prohibited and requires prior approval. By downloading any pretrained encoder, you agree to follow the model's respective license.
+
+## Acknowledgements
+
+The project was built on top of amazing repositories such as [Timm](https://github.com/huggingface/pytorch-image-models/), [HuggingFace](https://huggingface.co/docs/datasets/en/index), and open-source contributions from the community. We thank the authors and developers for their contribution. 
+
+## Issues
+
+- The preferred mode of communication is via GitHub issues.
+- If GitHub issues are inappropriate, email guillaume.jaume@unil.ch and andrewzh@mit.edu.
+- Immediate response to minor issues may not be available.
+
+## Funding
+This work was funded by NIH NIGMS [R35GM138216](https://reporter.nih.gov/search/sWDcU5IfAUCabqoThQ26GQ/project-details/10029418).
+
+## How to cite
+
+If you find our work useful in your research or if you use parts of this code, please consider citing our papers:
+
+```
+@article{zhang2025standardizing,
+  title={Accelerating Data Processing and Benchmarking of AI Models for Pathology},
+  author={Zhang, Andrew and Jaume, Guillaume and Vaidya, Anurag and Ding, Tong and Mahmood, Faisal},
+  journal={arXiv preprint arXiv:2502.06750},
+  year={2025}
+}
+
+@article{vaidya2025molecular,
+  title={Molecular-driven Foundation Model for Oncologic Pathology},
+  author={Vaidya, Anurag and Zhang, Andrew and Jaume, Guillaume and Song, Andrew H and Ding, Tong and Wagner, Sophia J and Lu, Ming Y and Doucet, Paul and Robertson, Harry and Almagro-Perez, Cristina and others},
+  journal={arXiv preprint arXiv:2501.16652},
+  year={2025}
+}
+
+```
+
+<img src="_readme/joint_logo.png"> 
